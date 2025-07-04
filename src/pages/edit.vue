@@ -534,6 +534,7 @@ import {
     remove,
     writeFile,
     rename,
+    mkdir,
 } from '@tauri-apps/plugin-fs'
 import {
     appCacheDir,
@@ -985,12 +986,6 @@ const loadHtml = async () => {
         const isExists = await exists(indexHtml)
         if (isExists) {
             const files = await readDirRecursively(selected)
-            if (files.length >= fileLimitNumber) {
-                oneMessage.error(
-                    t('fileLimitNumber', { number: fileLimitNumber })
-                )
-                return
-            }
             const configUrl = `index.html (${t('moreAssets')}+${files.length})`
             store.currentProject.url = configUrl
             store.currentProject.htmlPath = selected
@@ -1594,37 +1589,41 @@ const easyLocal = async () => {
         : store.currentProject.name
     const targetExe = await join(targetDir, targetName, `${targetName}.exe`)
     if (platformName === 'windows') {
-        const ppExeDir: string = await invoke('get_exe_dir')
-        const rhExePath = await join(ppExeDir, 'data', 'rh.exe')
-        // exists
-        if (await exists(rhExePath)) {
-            console.log('rh.exe exists')
+        const appDataDirPath = await appDataDir()
+        if (await exists(appDataDirPath)) {
+            console.log('appDataDirPath exists')
         } else {
-            await invoke('download_file', {
-                url: rhExeUrl,
-                savePath: rhExePath,
-                fileId: 'rh.exe',
-            })
+            await mkdir(appDataDirPath, { recursive: true })
         }
         // ico save to local
         const base64String = store.currentProject.iconRound
             ? roundIcon.value
             : iconBase64.value
         const icoBlob = await base64PngToIco(base64String)
-        const icoPath = await join(ppExeDir, 'data', 'app.ico')
+        const icoPath = await join(appDataDirPath, 'app.ico')
         await writeFile(icoPath, icoBlob)
         // save rhscript.txt
         const rhscript = await readStaticFile('rhscript.txt')
-        const rhtarget = rhscript.replace('Target.exe', targetExe)
-        const rhscriptPath = await join(ppExeDir, 'data', 'rhscript.txt')
+        // replace ppexe path
+        const ppexePath: string = await invoke('get_exe_dir', { parent: false })
+        // log path
+        const logPath: string = await join(appDataDirPath, 'rh.log')
+        const rhtarget = rhscript
+            .replace('PakePlus.exe', ppexePath)
+            .replace('Target.exe', targetExe)
+            .replace('rh.log', logPath)
+            .replace('app.ico', icoPath)
+        const rhscriptPath = await join(appDataDirPath, 'rhscript.txt')
         await writeTextFile(rhscriptPath, rhtarget)
     } else {
         targetName = store.currentProject.showName
     }
     // build local
+    console.log('store.currentProject.more.windows', store.currentProject.name)
     // store.currentProject.isHtml && store.currentProject.htmlPath
     invoke('build_local', {
         targetDir: targetDir,
+        projectName: store.currentProject.name,
         exeName: targetName,
         config: store.currentProject.more.windows,
         base64Png:
@@ -1724,7 +1723,17 @@ const publishCheck = async () => {
     loadingText(t('preCheck') + '...')
     await new Promise((resolve) => setTimeout(resolve, 3000))
     if (store.currentProject.desktop.buildMethod === 'local') {
-        await easyLocal()
+        try {
+            await easyLocal()
+        } catch (error: any) {
+            console.error('easyLocal error', error)
+            warning.value = error.message
+            buildLoading.value = false
+            buildSecondTimer && clearInterval(buildSecondTimer)
+            buildTime = 0
+            buildRate.value = 0
+            return
+        }
     } else if (store.token === '') {
         oneMessage.error(t('configToken'))
         buildLoading.value = false
